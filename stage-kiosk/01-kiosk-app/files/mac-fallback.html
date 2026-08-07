@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Not connected</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #14171a;
+    color: #f2f2f2;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .card {
+    text-align: center;
+    padding: 3vw;
+  }
+  h1 {
+    font-size: 4vw;
+    margin: 0 0 1vw;
+    color: #ff6b6b;
+  }
+  p {
+    font-size: 1.6vw;
+    color: #b7bcc2;
+    margin: 0.5vw 0;
+  }
+  .mac {
+    margin-top: 2vw;
+    font-family: "Consolas", "Menlo", monospace;
+    font-size: 4.5vw;
+    letter-spacing: 0.1em;
+    background: #1e2226;
+    border: 2px solid #ff6b6b;
+    border-radius: 12px;
+    padding: 2vw 3vw;
+    display: inline-block;
+  }
+  .hostname {
+    margin-top: 1.5vw;
+    font-size: 1.4vw;
+    color: #6b7280;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Not connected to network</h1>
+    <p>This display's WiFi MAC address needs to be added to the wahoo network allowlist:</p>
+    <div class="mac">{{MAC}}</div>
+    <p class="hostname">{{HOSTNAME}} &middot; will switch to the dashboard automatically once connected</p>
+  </div>
+</body>
+</html>

@@ -1,0 +1,29 @@
+# pi-gen build config for the UVA Transit arrivals kiosk image.
+# See pi-gen/README.md for the full list of supported variables.
+
+IMG_NAME="uts-kiosk"
+RELEASE=trixie
+
+TARGET_HOSTNAME="uts-kiosk"
+
+# This account only exists for maintenance (SSH fallback); day-to-day access is via RustDesk.
+FIRST_USER_NAME="uts"
+FIRST_USER_PASS="CHANGE-ME-BEFORE-BUILDING"
+DISABLE_FIRST_BOOT_USER_RENAME=1
+
+# Required or NetworkManager disables the WiFi radio entirely (rfkill) by default.
+WPA_COUNTRY="US"
+
+LOCALE_DEFAULT="en_US.UTF-8"
+KEYBOARD_KEYMAP="us"
+KEYBOARD_LAYOUT="English (US)"
+TIMEZONE_DEFAULT="America/New_York"
+
+# SSH is a maintenance fallback (e.g. testing at home), not relied on at deployment sites.
+ENABLE_SSH=1
+
+DEPLOY_COMPRESSION=xz
+
+# Build only through our custom kiosk stage - skips the desktop/full-image stages (3-5)
+# entirely, so we only ever produce the Lite-based kiosk image.
+STAGE_LIST="${BASE_DIR}/stage0 ${BASE_DIR}/stage1 ${BASE_DIR}/stage2 ${BASE_DIR}/stage-kiosk"

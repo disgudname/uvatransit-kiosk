@@ -1,0 +1,11 @@
+chromium
+xserver-xorg
+xinit
+x11-xserver-utils
+matchbox-window-manager
+unclutter
+xdotool
+network-manager
+cron
+curl
+ca-certificates

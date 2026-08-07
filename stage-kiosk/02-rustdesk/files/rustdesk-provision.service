@@ -1,0 +1,13 @@
+[Unit]
+Description=Set fixed RustDesk password and record device ID
+After=rustdesk.service network-online.target
+Wants=network-online.target
+Requires=rustdesk.service
+
+[Service]
+Type=oneshot
+ExecStart=/etc/kiosk/rustdesk-provision.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

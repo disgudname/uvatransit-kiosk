@@ -1,0 +1,3 @@
+# Nightly reboot keeps the kiosk running smoothly over long unattended uptimes
+# (same rationale chilipie-kiosk used). Runs at 3:30am local time.
+30 3 * * * root /sbin/reboot
