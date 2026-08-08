@@ -1,12 +1,18 @@
 # UVA Transit arrivals kiosk image
 
-A self-contained Raspberry Pi image for UVA Transit bus-stop arrival displays. Boots
-straight into full-screen Chromium showing the arrivals dashboard for whatever stop
-it's deployed at, falls back to showing its own WiFi MAC address (for network
-allowlisting) when it can't get online, and carries RustDesk for remote access with a
-fixed password. Built with [pi-gen](https://github.com/RPi-Distro/pi-gen), the same
-tool the Raspberry Pi Foundation uses for their own images — no manual SD-card/SSH
-build process, no physical Pi required to build it.
+A self-contained Raspberry Pi image for UVA Transit bus-stop arrival displays (and the
+occasional non-bus-stop display). Boots straight into full-screen Chromium, checks in
+with the ops dashboard by WiFi MAC address every ~15 seconds, and shows whatever the
+dashboard assigns that device — normally a bus stop's arrivals board, or a full URL
+override for special-case kiosks. Falls back to showing its own MAC address (for WiFi
+allowlisting, or for registering it on the dashboard) when it isn't online or isn't
+registered yet. Carries RustDesk for remote access with a fixed password. Built with
+[pi-gen](https://github.com/RPi-Distro/pi-gen), the same tool the Raspberry Pi
+Foundation uses for their own images — no manual SD-card/SSH build process, no
+physical Pi required to build it.
+
+Building an image? Keep reading. Flashing and deploying one that's already built?
+See [DEPLOYMENT.md](DEPLOYMENT.md) instead.
 
 ## 1. One-time setup: install Docker
 
@@ -70,31 +76,11 @@ OS). When it finishes, your image is at `deploy/*-kiosk.img.xz`.
 
 ## 5. Flash & deploy
 
-1. Flash `deploy/*-kiosk.img.xz` with BalenaEtcher, same as before.
-2. Boot the Pi at the deployment site. It joins the hidden, open `wahoo` network
-   automatically. Every ~15 seconds it checks in with the ops dashboard (reporting its
-   WiFi MAC, hostname, RustDesk ID, and image build), and the dashboard tells it what
-   to show:
-   - **Not online yet** (MAC not allowlisted on `wahoo`, or no Inseego dongle) —
-     shows its WiFi MAC address so it can be allowlisted. Switches over automatically
-     once connected, no reboot needed.
-   - **Online, but not registered with the dashboard yet** — shows a different
-     screen (still with its MAC) telling you to add it to the fleet on the
-     dashboard's kiosk-fleet page. Switches over automatically once registered.
-   - **Registered** — loads `https://utsopsdashboard.com/arrivalsdisplay?code=<site
-     code>` using whatever code the dashboard has assigned to this MAC. Moving a
-     device to a different stop later is just an edit on the dashboard — no reflash,
-     no SD card pull.
-   - **Registered with a URL override** — for the rare non-bus-stop kiosk (e.g. one
-     in the training office showing a spreadsheet instead of arrivals), the
-     dashboard can assign a full URL instead of a site code, and the kiosk loads
-     that directly. This takes priority over a site code if the dashboard ever sets
-     both.
-3. `site-code.txt` on the boot partition (FAT32, visible from any computer) still
-   exists as a **manual override/fallback** — used whenever the dashboard hasn't
-   assigned a site code yet (e.g. testing at home before the dashboard knows about
-   the device). Once the dashboard has a real assignment for that MAC, the
-   dashboard's answer wins.
+Flash `deploy/*-kiosk.img.xz` with BalenaEtcher, then see
+**[DEPLOYMENT.md](DEPLOYMENT.md)** for the full walkthrough from first boot through
+getting it registered on the ops dashboard, plus troubleshooting. Short version: the
+kiosk checks in with the dashboard by WiFi MAC every ~15 seconds and shows whatever
+the dashboard assigns it — no reflash needed to change what a deployed device shows.
 
 ## Remote access (RustDesk)
 
@@ -127,6 +113,8 @@ build time.
       the display live, no reboot
 - [ ] With no dashboard assignment but a test `site-code.txt` set: loads that code's
       dashboard URL as the fallback
+- [ ] Assigning a URL override (instead of a site code) on the dashboard loads that
+      URL directly, and takes priority if a site code is also set
 - [ ] The device shows up on the dashboard's kiosk-fleet page with correct hostname,
       RustDesk ID, and image build timestamp
 - [ ] RustDesk connects remotely using the fixed password
@@ -139,8 +127,10 @@ build time.
 - `pi-gen/` — official upstream image builder (git submodule, `arm64` branch)
 - `config` — pi-gen build settings (hostname, user, WiFi country, etc.)
 - `stage-kiosk/` — our custom pi-gen stage, inserted after the stock "Lite" stage:
-  - `00-packages` — Chromium, X11, matchbox, NetworkManager, etc.
-  - `01-kiosk-app/` — the kiosk launch script, systemd service, MAC-fallback page,
-    `wahoo` WiFi profile, nightly-reboot cron entry
+  - `00-packages` — Chromium, X11, matchbox, NetworkManager, `jq`, etc.
+  - `01-kiosk-app/` — the kiosk launch script (dashboard check-in, three-screen-state
+    logic), systemd service, the "not connected" and "not registered" fallback
+    pages, `wahoo` WiFi profile, nightly-reboot cron entry, build-timestamp stamping
   - `02-rustdesk/` — RustDesk install + fixed-password provisioning
 - `build-local.sh` — copies `stage-kiosk/` into `pi-gen/` and runs the Docker build
+- `DEPLOYMENT.md` — field runbook for flashing and deploying an already-built image
