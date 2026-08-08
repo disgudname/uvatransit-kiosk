@@ -1,13 +1,13 @@
 # pi-gen build config for the UVA Transit arrivals kiosk image.
 # See pi-gen/README.md for the full list of supported variables.
 
-IMG_NAME="uts-kiosk"
+IMG_NAME="uvatransit-kiosk"
 RELEASE=trixie
 
-TARGET_HOSTNAME="uts-kiosk"
+TARGET_HOSTNAME="uvatransit-kiosk"
 
 # This account only exists for maintenance (SSH fallback); day-to-day access is via RustDesk.
-FIRST_USER_NAME="uts"
+FIRST_USER_NAME="uvatransit"
 FIRST_USER_PASS="CHANGE-ME-BEFORE-BUILDING"
 DISABLE_FIRST_BOOT_USER_RENAME=1
 

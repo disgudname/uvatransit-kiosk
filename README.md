@@ -49,8 +49,8 @@ Clone it into WSL2's own filesystem (not `/mnt/c/...`) — building against a
 Windows-mounted path is slower and can hit permission issues:
 
 ```bash
-git clone --recurse-submodules https://github.com/<your-github-username>/chilipie-kiosk-modern.git ~/chilipie-kiosk-modern
-cd ~/chilipie-kiosk-modern
+git clone --recurse-submodules https://github.com/<your-github-username>/uvatransit-kiosk.git ~/uvatransit-kiosk
+cd ~/uvatransit-kiosk
 ```
 
 ## 3. Before your first build
