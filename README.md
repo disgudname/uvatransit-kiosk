@@ -85,6 +85,11 @@ OS). When it finishes, your image is at `deploy/*-kiosk.img.xz`.
      code>` using whatever code the dashboard has assigned to this MAC. Moving a
      device to a different stop later is just an edit on the dashboard — no reflash,
      no SD card pull.
+   - **Registered with a URL override** — for the rare non-bus-stop kiosk (e.g. one
+     in the training office showing a spreadsheet instead of arrivals), the
+     dashboard can assign a full URL instead of a site code, and the kiosk loads
+     that directly. This takes priority over a site code if the dashboard ever sets
+     both.
 3. `site-code.txt` on the boot partition (FAT32, visible from any computer) still
    exists as a **manual override/fallback** — used whenever the dashboard hasn't
    assigned a site code yet (e.g. testing at home before the dashboard knows about

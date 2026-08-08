@@ -8,7 +8,7 @@
 set -u
 
 BASE_URL="https://utsopsdashboard.com/arrivalsdisplay"
-CHECKIN_URL="https://utsopsdashboard.com/v1/kiosk-checkin"
+CHECKIN_ENDPOINT="https://utsopsdashboard.com/v1/kiosk-checkin"
 SITE_CODE_FILE="/boot/firmware/site-code.txt"
 RUSTDESK_ID_FILE="/boot/firmware/rustdesk-id.txt"
 IMAGE_BUILD_FILE="/etc/kiosk/image-build.txt"
@@ -46,12 +46,15 @@ render_page() {
 }
 
 # Checks in with the dashboard, reporting this device's identity and getting
-# back whatever site code (if any) it's been assigned. Sets CHECKIN_OK (whether
-# the request itself succeeded - i.e. is there a network at all) and
-# CHECKIN_SITE_CODE (empty if the dashboard has no site assigned for this MAC
-# yet - a normal, successful response, not a failure).
+# back whatever it's been assigned. Sets CHECKIN_OK (whether the request itself
+# succeeded - i.e. is there a network at all), CHECKIN_SITE_CODE (empty if no
+# site assigned yet - a normal, successful response, not a failure), and
+# CHECKIN_DISPLAY_URL (a full URL override for non-bus-stop kiosks, e.g. a
+# training-office display showing a spreadsheet instead of arrivals - empty for
+# the common case).
 CHECKIN_OK=0
 CHECKIN_SITE_CODE=""
+CHECKIN_DISPLAY_URL=""
 checkin() {
   local payload response
   payload="$(jq -n \
@@ -61,25 +64,32 @@ checkin() {
     --arg image_build "$(read_trimmed "$IMAGE_BUILD_FILE")" \
     '{mac: $mac, hostname: $hostname, rustdesk_id: $rustdesk_id, image_build: $image_build}')"
   if response="$(curl -fsS --max-time 5 -H 'Content-Type: application/json' \
-    -d "$payload" "$CHECKIN_URL")"; then
+    -d "$payload" "$CHECKIN_ENDPOINT")"; then
     CHECKIN_OK=1
     CHECKIN_SITE_CODE="$(jq -r '.site_code // empty' <<< "$response")"
+    CHECKIN_DISPLAY_URL="$(jq -r '.url // empty' <<< "$response")"
   else
     CHECKIN_OK=0
     CHECKIN_SITE_CODE=""
+    CHECKIN_DISPLAY_URL=""
   fi
 }
 
-# Decides what Chromium should be pointed at right now: the real dashboard (site
-# code from the dashboard's check-in response, or failing that the local
-# site-code.txt override), the "not registered" page (online, but the dashboard
-# hasn't been told what this MAC should show), or the "not connected" page (the
-# check-in request itself couldn't reach the dashboard at all).
+# Decides what Chromium should be pointed at right now, in priority order: a
+# full URL override from the dashboard (non-bus-stop kiosks), the arrivals
+# dashboard for the site code the dashboard assigned, the local site-code.txt
+# fallback if the dashboard hasn't assigned anything, the "not registered" page
+# (online, but nothing assigned at all), or the "not connected" page (the
+# check-in request itself couldn't reach the dashboard).
 want_target() {
   checkin
   if [ "$CHECKIN_OK" != "1" ]; then
     render_page "$FALLBACK_TEMPLATE" "$FALLBACK_RENDERED"
     echo "file://${FALLBACK_RENDERED}"
+    return
+  fi
+  if [ -n "$CHECKIN_DISPLAY_URL" ]; then
+    echo "$CHECKIN_DISPLAY_URL"
     return
   fi
   if [ -n "$CHECKIN_SITE_CODE" ]; then
