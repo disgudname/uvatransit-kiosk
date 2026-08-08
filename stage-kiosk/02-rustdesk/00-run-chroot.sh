@@ -13,5 +13,8 @@ apt-get update
 apt-get install -y /tmp/rustdesk.deb
 rm -f /tmp/rustdesk.deb
 
+# The .deb ships its unit file under /usr/share instead of installing it into
+# a systemd unit search path, so it needs to be copied into place manually.
+cp /usr/share/rustdesk/files/systemd/rustdesk.service /etc/systemd/system/rustdesk.service
 systemctl enable rustdesk
 systemctl enable rustdesk-provision.service
