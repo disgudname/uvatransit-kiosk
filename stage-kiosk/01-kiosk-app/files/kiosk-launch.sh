@@ -13,9 +13,9 @@ SITE_CODE_FILE="/boot/firmware/site-code.txt"
 RUSTDESK_ID_FILE="/boot/firmware/rustdesk-id.txt"
 IMAGE_BUILD_FILE="/etc/kiosk/image-build.txt"
 FALLBACK_TEMPLATE="/etc/kiosk/mac-fallback.html"
-FALLBACK_RENDERED="/run/kiosk-mac-fallback.html"
+FALLBACK_RENDERED="/tmp/kiosk-mac-fallback.html"
 NOT_REGISTERED_TEMPLATE="/etc/kiosk/not-registered.html"
-NOT_REGISTERED_RENDERED="/run/kiosk-not-registered.html"
+NOT_REGISTERED_RENDERED="/tmp/kiosk-not-registered.html"
 WLAN_IFACE="wlan0"
 CHECK_INTERVAL=15
 
