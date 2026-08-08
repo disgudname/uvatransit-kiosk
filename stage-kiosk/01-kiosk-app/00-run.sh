@@ -4,6 +4,11 @@ install -v -m 755 -o root -g root -d "${ROOTFS_DIR}/etc/kiosk"
 
 install -v -m 755 -o root -g root files/kiosk-launch.sh "${ROOTFS_DIR}/etc/kiosk/kiosk-launch.sh"
 install -v -m 644 -o root -g root files/mac-fallback.html "${ROOTFS_DIR}/etc/kiosk/mac-fallback.html"
+install -v -m 644 -o root -g root files/not-registered.html "${ROOTFS_DIR}/etc/kiosk/not-registered.html"
+
+# Records when this specific image was built, reported to the dashboard on
+# every check-in so a device's running image version is visible fleet-wide.
+date -u +%Y-%m-%dT%H:%M:%SZ > "${ROOTFS_DIR}/etc/kiosk/image-build.txt"
 
 sed "s/KIOSK_USER_PLACEHOLDER/${FIRST_USER_NAME}/g" files/kiosk.service \
 	> "${ROOTFS_DIR}/etc/systemd/system/kiosk.service"
@@ -20,6 +25,6 @@ BOOT_CMDLINE_TXT="${ROOTFS_DIR}/boot/firmware/cmdline.txt"
 echo "disable_splash=1" >> "${BOOT_CONFIG_TXT}"
 sed -i 's/$/ quiet loglevel=3 logo.nologo vt.global_cursor_default=0/' "${BOOT_CMDLINE_TXT}"
 
-# Placeholder the site operator drops a code into (e.g. "EIGSB") to pick which
-# bus stop this device displays; safe to leave blank until deployment.
+# Manual fallback/override, only used when the ops dashboard hasn't assigned a
+# site code to this device's MAC yet (e.g. testing at home). Safe to leave blank.
 touch "${ROOTFS_DIR}/boot/firmware/site-code.txt"

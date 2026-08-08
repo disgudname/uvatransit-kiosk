@@ -9,3 +9,4 @@ network-manager
 cron
 curl
 ca-certificates
+jq

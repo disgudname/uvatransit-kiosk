@@ -71,16 +71,25 @@ OS). When it finishes, your image is at `deploy/*-kiosk.img.xz`.
 ## 5. Flash & deploy
 
 1. Flash `deploy/*-kiosk.img.xz` with BalenaEtcher, same as before.
-2. Before (or after) first boot, set the site code for this specific deployment: open
-   the small FAT32 boot partition on the SD card (visible from any computer, including
-   Windows) and edit `site-code.txt` to contain just the stop's code, e.g. `EIGSB`. The
-   dashboard URL is built as `https://utsopsdashboard.com/arrivalsdisplay?code=<that
-   code>`. Leave the file blank to load the dashboard with no code.
-3. Boot the Pi at the deployment site. It joins the hidden, open `wahoo` network
-   automatically. If it can't get online (e.g. this Pi's MAC hasn't been allowlisted
-   yet, or an Inseego dongle isn't plugged in), the screen shows its WiFi MAC address
-   instead of a blank dashboard — register that MAC, and it switches over to the
-   dashboard automatically within about 15 seconds, no reboot needed.
+2. Boot the Pi at the deployment site. It joins the hidden, open `wahoo` network
+   automatically. Every ~15 seconds it checks in with the ops dashboard (reporting its
+   WiFi MAC, hostname, RustDesk ID, and image build), and the dashboard tells it what
+   to show:
+   - **Not online yet** (MAC not allowlisted on `wahoo`, or no Inseego dongle) —
+     shows its WiFi MAC address so it can be allowlisted. Switches over automatically
+     once connected, no reboot needed.
+   - **Online, but not registered with the dashboard yet** — shows a different
+     screen (still with its MAC) telling you to add it to the fleet on the
+     dashboard's kiosk-fleet page. Switches over automatically once registered.
+   - **Registered** — loads `https://utsopsdashboard.com/arrivalsdisplay?code=<site
+     code>` using whatever code the dashboard has assigned to this MAC. Moving a
+     device to a different stop later is just an edit on the dashboard — no reflash,
+     no SD card pull.
+3. `site-code.txt` on the boot partition (FAT32, visible from any computer) still
+   exists as a **manual override/fallback** — used whenever the dashboard hasn't
+   assigned a site code yet (e.g. testing at home before the dashboard knows about
+   the device). Once the dashboard has a real assignment for that MAC, the
+   dashboard's answer wins.
 
 ## Remote access (RustDesk)
 
@@ -101,10 +110,20 @@ build time.
 ## Testing checklist (on the Pi 3B+ you have on hand)
 
 - [ ] Boots directly to full-screen Chromium, no console/login screen visible
-- [ ] With a test `site-code.txt` set, the correct dashboard URL loads
 - [ ] Joins the `wahoo` network automatically (hidden, open SSID)
-- [ ] With WiFi unavailable/unregistered: shows the MAC-address fallback page
-- [ ] Once the MAC is allowlisted: switches to the dashboard on its own, no reboot
+- [ ] With WiFi unavailable/unregistered on `wahoo`: shows the "not connected"
+      MAC-address fallback page
+- [ ] Once the MAC is allowlisted but not yet registered on the dashboard: switches
+      to the distinct "not registered" page (still shows the MAC, different
+      messaging/color from the not-connected page)
+- [ ] Once the MAC is assigned a site code on the dashboard's kiosk-fleet page:
+      switches to the real arrivals dashboard on its own, no reboot
+- [ ] Reassigning the site code on the dashboard while the kiosk is running updates
+      the display live, no reboot
+- [ ] With no dashboard assignment but a test `site-code.txt` set: loads that code's
+      dashboard URL as the fallback
+- [ ] The device shows up on the dashboard's kiosk-fleet page with correct hostname,
+      RustDesk ID, and image build timestamp
 - [ ] RustDesk connects remotely using the fixed password
 - [ ] Inseego USB cellular dongle still "just works" as a fallback connection
 - [ ] Survives an overnight unattended run (nightly reboot at 3:30am shouldn't

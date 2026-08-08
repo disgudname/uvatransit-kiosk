@@ -1,18 +1,23 @@
 #!/bin/bash
 # Kiosk xinitrc: launches matchbox + Chromium pointed at the arrivals dashboard,
 # falling back to a "not connected" page (showing this Pi's WiFi MAC address, for
-# allowlisting on the wahoo network) until the network comes up. Runs as the X
-# client under `startx` - see kiosk.service.
+# allowlisting on the wahoo network) until the network comes up, or a "not
+# registered" page if it's online but the dashboard has no site assigned to this
+# device's MAC yet. Runs as the X client under `startx` - see kiosk.service.
 
 set -u
 
 BASE_URL="https://utsopsdashboard.com/arrivalsdisplay"
+CHECKIN_URL="https://utsopsdashboard.com/v1/kiosk-checkin"
 SITE_CODE_FILE="/boot/firmware/site-code.txt"
+RUSTDESK_ID_FILE="/boot/firmware/rustdesk-id.txt"
+IMAGE_BUILD_FILE="/etc/kiosk/image-build.txt"
 FALLBACK_TEMPLATE="/etc/kiosk/mac-fallback.html"
 FALLBACK_RENDERED="/run/kiosk-mac-fallback.html"
+NOT_REGISTERED_TEMPLATE="/etc/kiosk/not-registered.html"
+NOT_REGISTERED_RENDERED="/run/kiosk-not-registered.html"
 WLAN_IFACE="wlan0"
 CHECK_INTERVAL=15
-CONNECT_CHECK_HOST="utsopsdashboard.com"
 
 xset s off
 xset s noblank
@@ -20,29 +25,75 @@ xset -dpms
 unclutter --timeout 1 --jitter 5 --ignore-scrolling &
 matchbox-window-manager -use_cursor no &
 
-dashboard_url() {
-  local code=""
-  if [ -f "$SITE_CODE_FILE" ]; then
-    code="$(tr -d '[:space:]' < "$SITE_CODE_FILE")"
-  fi
-  if [ -n "$code" ]; then
-    echo "${BASE_URL}?code=${code}"
-  else
-    echo "${BASE_URL}"
-  fi
-}
-
-render_fallback_page() {
-  local mac="unknown"
+get_mac() {
   if [ -f "/sys/class/net/${WLAN_IFACE}/address" ]; then
-    mac="$(cat "/sys/class/net/${WLAN_IFACE}/address")"
+    cat "/sys/class/net/${WLAN_IFACE}/address"
+  else
+    echo "unknown"
   fi
-  sed -e "s/{{MAC}}/${mac}/g" -e "s/{{HOSTNAME}}/$(hostname)/g" \
-    "$FALLBACK_TEMPLATE" > "$FALLBACK_RENDERED"
 }
 
-is_online() {
-  curl -fsS --max-time 5 -o /dev/null "https://${CONNECT_CHECK_HOST}/"
+read_trimmed() {
+  [ -f "$1" ] && tr -d '[:space:]' < "$1" || true
+}
+
+dashboard_url() {
+  echo "${BASE_URL}?code=$1"
+}
+
+render_page() {
+  sed -e "s/{{MAC}}/$(get_mac)/g" -e "s/{{HOSTNAME}}/$(hostname)/g" "$1" > "$2"
+}
+
+# Checks in with the dashboard, reporting this device's identity and getting
+# back whatever site code (if any) it's been assigned. Sets CHECKIN_OK (whether
+# the request itself succeeded - i.e. is there a network at all) and
+# CHECKIN_SITE_CODE (empty if the dashboard has no site assigned for this MAC
+# yet - a normal, successful response, not a failure).
+CHECKIN_OK=0
+CHECKIN_SITE_CODE=""
+checkin() {
+  local payload response
+  payload="$(jq -n \
+    --arg mac "$(get_mac)" \
+    --arg hostname "$(hostname)" \
+    --arg rustdesk_id "$(read_trimmed "$RUSTDESK_ID_FILE")" \
+    --arg image_build "$(read_trimmed "$IMAGE_BUILD_FILE")" \
+    '{mac: $mac, hostname: $hostname, rustdesk_id: $rustdesk_id, image_build: $image_build}')"
+  if response="$(curl -fsS --max-time 5 -H 'Content-Type: application/json' \
+    -d "$payload" "$CHECKIN_URL")"; then
+    CHECKIN_OK=1
+    CHECKIN_SITE_CODE="$(jq -r '.site_code // empty' <<< "$response")"
+  else
+    CHECKIN_OK=0
+    CHECKIN_SITE_CODE=""
+  fi
+}
+
+# Decides what Chromium should be pointed at right now: the real dashboard (site
+# code from the dashboard's check-in response, or failing that the local
+# site-code.txt override), the "not registered" page (online, but the dashboard
+# hasn't been told what this MAC should show), or the "not connected" page (the
+# check-in request itself couldn't reach the dashboard at all).
+want_target() {
+  checkin
+  if [ "$CHECKIN_OK" != "1" ]; then
+    render_page "$FALLBACK_TEMPLATE" "$FALLBACK_RENDERED"
+    echo "file://${FALLBACK_RENDERED}"
+    return
+  fi
+  if [ -n "$CHECKIN_SITE_CODE" ]; then
+    dashboard_url "$CHECKIN_SITE_CODE"
+    return
+  fi
+  local local_code
+  local_code="$(read_trimmed "$SITE_CODE_FILE")"
+  if [ -n "$local_code" ]; then
+    dashboard_url "$local_code"
+    return
+  fi
+  render_page "$NOT_REGISTERED_TEMPLATE" "$NOT_REGISTERED_RENDERED"
+  echo "file://${NOT_REGISTERED_RENDERED}"
 }
 
 CHROMIUM_FLAGS="--kiosk --incognito --noerrdialogs --disable-infobars \
@@ -63,28 +114,20 @@ launch_chromium() {
 # Initial grace period for WiFi/cellular to associate, so a normal boot doesn't
 # flash the fallback page before settling on the real dashboard.
 for _ in 1 2 3 4 5 6 7 8 9; do
-  is_online && break
+  checkin
+  [ "$CHECKIN_OK" = "1" ] && break
   sleep 5
 done
 
-if is_online; then
-  launch_chromium "$(dashboard_url)"
-else
-  render_fallback_page
-  launch_chromium "file://${FALLBACK_RENDERED}"
-fi
+launch_chromium "$(want_target)"
 
-# Watchdog: restart Chromium if it dies, and flip between the dashboard and the
-# fallback page as connectivity changes - no reboot required either way.
+# Watchdog: restart Chromium if it dies, and flip between the dashboard, the
+# not-connected page, and the not-registered page as check-in results change -
+# no reboot required either way.
 while true; do
   sleep "$CHECK_INTERVAL"
 
-  if is_online; then
-    WANT_TARGET="$(dashboard_url)"
-  else
-    render_fallback_page
-    WANT_TARGET="file://${FALLBACK_RENDERED}"
-  fi
+  WANT_TARGET="$(want_target)"
 
   if ! kill -0 "$CHROMIUM_PID" 2>/dev/null; then
     launch_chromium "$WANT_TARGET"
