@@ -26,4 +26,10 @@ DEPLOY_COMPRESSION=xz
 
 # Build only through our custom kiosk stage - skips the desktop/full-image stages (3-5)
 # entirely, so we only ever produce the Lite-based kiosk image.
-STAGE_LIST="${BASE_DIR}/stage0 ${BASE_DIR}/stage1 ${BASE_DIR}/stage2 ${BASE_DIR}/stage-kiosk"
+#
+# BASE_DIR isn't set yet the first time pi-gen's build-docker.sh sources this
+# file (on the host, before BASE_DIR exists, under `set -u`) - only the second
+# time, when build.sh sources it again inside the container, is BASE_DIR real.
+# The `:-.` default avoids crashing that first pass; it's unused either way
+# since only the in-container STAGE_LIST value ever gets acted on.
+STAGE_LIST="${BASE_DIR:-.}/stage0 ${BASE_DIR:-.}/stage1 ${BASE_DIR:-.}/stage2 ${BASE_DIR:-.}/stage-kiosk"
