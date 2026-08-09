@@ -4,6 +4,12 @@
 # allowlisting on the wahoo network) until the network comes up, or a "not
 # registered" page if it's online but the dashboard has no site assigned to this
 # device's MAC yet. Runs as the X client under `startx` - see kiosk.service.
+#
+# Shows a branded "starting up" loading page immediately (the 03-splash stage's
+# Plymouth theme covers the kernel-boot phase before this script even runs, but
+# quits at the normal systemd handoff point - this page covers the gap from
+# there until the first check-in result is known, so there's never a plain
+# black screen at any point in the boot sequence).
 
 set -u
 
@@ -16,6 +22,7 @@ FALLBACK_TEMPLATE="/etc/kiosk/mac-fallback.html"
 FALLBACK_RENDERED="/tmp/kiosk-mac-fallback.html"
 NOT_REGISTERED_TEMPLATE="/etc/kiosk/not-registered.html"
 NOT_REGISTERED_RENDERED="/tmp/kiosk-not-registered.html"
+LOADING_PAGE="/etc/kiosk/loading.html"
 WLAN_IFACE="wlan0"
 CHECK_INTERVAL=15
 
@@ -121,6 +128,11 @@ launch_chromium() {
   CURRENT_TARGET="$target"
 }
 
+# Show the loading page immediately, so there's something branded on screen
+# the moment X starts rather than a blank window while the grace period below
+# runs.
+launch_chromium "file://${LOADING_PAGE}"
+
 # Initial grace period for WiFi/cellular to associate, so a normal boot doesn't
 # flash the fallback page before settling on the real dashboard.
 for _ in 1 2 3 4 5 6 7 8 9; do
@@ -129,7 +141,10 @@ for _ in 1 2 3 4 5 6 7 8 9; do
   sleep 5
 done
 
-launch_chromium "$(want_target)"
+WANT_TARGET="$(want_target)"
+kill "$CHROMIUM_PID" 2>/dev/null
+wait "$CHROMIUM_PID" 2>/dev/null
+launch_chromium "$WANT_TARGET"
 
 # Watchdog: restart Chromium if it dies, and flip between the dashboard, the
 # not-connected page, and the not-registered page as check-in results change -

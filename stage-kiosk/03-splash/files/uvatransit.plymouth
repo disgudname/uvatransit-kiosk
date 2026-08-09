@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=UVATransit
+Description=UVA Transit kiosk boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/uvatransit
+ScriptFile=/usr/share/plymouth/themes/uvatransit/uvatransit.script
