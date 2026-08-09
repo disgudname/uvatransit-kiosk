@@ -31,8 +31,16 @@ if [ -n "$ID" ]; then
 	echo "$ID" > "$ID_OUT"
 fi
 
+# `rustdesk --password` talks to the already-running daemon over a local IPC
+# socket with only a ~1s timeout, with no fallback if that daemon isn't ready
+# yet to accept connections - and critically, it prints "Done!" on success or
+# an error message on failure but exits 0 either way, so the exit code can't
+# be used to detect failure. Check the actual output instead.
 PASSWORD="$(cat "$PASSWORD_FILE")"
-for _ in $(seq 1 10); do
-	rustdesk --password "$PASSWORD" && break
+for _ in $(seq 1 20); do
+	OUTPUT="$(rustdesk --password "$PASSWORD" 2>&1)"
+	case "$OUTPUT" in
+		*Done*) break ;;
+	esac
 	sleep 2
 done
