@@ -23,6 +23,7 @@ FALLBACK_RENDERED="/tmp/kiosk-mac-fallback.html"
 NOT_REGISTERED_TEMPLATE="/etc/kiosk/not-registered.html"
 NOT_REGISTERED_RENDERED="/tmp/kiosk-not-registered.html"
 LOADING_PAGE="/etc/kiosk/loading.html"
+CHANNEL_FILE="/tmp/kiosk-channel"
 WLAN_IFACE="wlan0"
 CHECK_INTERVAL=15
 
@@ -58,7 +59,11 @@ render_page() {
 # site assigned yet - a normal, successful response, not a failure), and
 # CHECKIN_DISPLAY_URL (a full URL override for non-bus-stop kiosks, e.g. a
 # training-office display showing a spreadsheet instead of arrivals - empty for
-# the common case).
+# the common case). Also drops the dashboard-assigned update channel
+# (dev/prod) into CHANNEL_FILE on every successful poll, for
+# kiosk-self-update.sh to read - piggybacking on this existing poll instead of
+# a second independent check-in call. Left untouched (not cleared) on a failed
+# poll, so self-update keeps using the last known-good channel while offline.
 CHECKIN_OK=0
 CHECKIN_SITE_CODE=""
 CHECKIN_DISPLAY_URL=""
@@ -75,6 +80,7 @@ checkin() {
     CHECKIN_OK=1
     CHECKIN_SITE_CODE="$(jq -r '.site_code // empty' <<< "$response")"
     CHECKIN_DISPLAY_URL="$(jq -r '.url // empty' <<< "$response")"
+    jq -r '.channel // "prod"' <<< "$response" > "$CHANNEL_FILE"
   else
     CHECKIN_OK=0
     CHECKIN_SITE_CODE=""
@@ -113,10 +119,18 @@ want_target() {
   echo "file://${NOT_REGISTERED_RENDERED}"
 }
 
+# chrome://gpu confirmed GPU rasterization/compositing are already hardware
+# accelerated by default on this build (Debian's packaged Chromium already
+# passes --enable-gpu-rasterization/--use-angle=gles itself) - no override
+# needed there. The last line instead disables Site Isolation: it spawns a
+# separate renderer process per origin as a defense against cross-site data
+# leaks, which costs real memory for no benefit on a kiosk that only ever
+# shows one fixed, trusted, same-origin page with no user-driven navigation.
 CHROMIUM_FLAGS="--kiosk --incognito --noerrdialogs --disable-infobars \
   --disable-session-crashed-bubble --disable-translate --no-first-run \
   --check-for-update-interval=31536000 --overscroll-history-navigation=0 \
-  --autoplay-policy=no-user-gesture-required --window-position=0,0"
+  --autoplay-policy=no-user-gesture-required --window-position=0,0 \
+  --disable-features=IsolateOrigins,site-per-process"
 
 CURRENT_TARGET=""
 CHROMIUM_PID=""

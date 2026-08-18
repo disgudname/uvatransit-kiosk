@@ -1,0 +1,7 @@
+[Unit]
+Description=Pull latest kiosk app files for this device's channel
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/etc/kiosk/kiosk-self-update.sh

@@ -1,0 +1,12 @@
+[Unit]
+Description=Periodic kiosk app self-update
+
+[Timer]
+# 3min gives kiosk-launch.sh's boot-time grace period time to populate
+# CHANNEL_FILE with a real check-in result before the first run.
+OnBootSec=3min
+OnUnitActiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
