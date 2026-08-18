@@ -1,0 +1,7 @@
+# Compressed RAM-backed swap (see stage 04-perf-tuning). Kept alongside the
+# existing SD-card-backed dphys-swapfile as a fast first tier - zram gets a
+# higher priority below, so the kernel prefers it and only falls through to
+# slow disk-backed swap under genuinely extreme memory pressure.
+ALGO=zstd
+PERCENT=50
+PRIORITY=100
