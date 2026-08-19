@@ -99,9 +99,16 @@ checkin() {
 # for the site code the dashboard assigned, the local site-code.txt fallback
 # if the dashboard hasn't assigned anything, the "not registered" page
 # (online, but nothing assigned at all), or the "not connected" page (the
-# check-in request itself couldn't reach the dashboard).
-want_target() {
-  checkin
+# check-in request itself couldn't reach the dashboard). Reads whatever
+# checkin() last set rather than calling it itself - every caller captures
+# this function's output via `$(...)`, which forks a subshell, and a
+# checkin() called from inside that subshell would set CHECKIN_CHANNEL in a
+# copy of the shell state that's discarded the instant the subshell exits.
+# CHECKIN_SITE_CODE/CHECKIN_DISPLAY_URL never showed the bug because they're
+# only read right here, inside that same subshell, before it exits -
+# CHECKIN_CHANNEL is read later by write_status() back in the parent shell,
+# where it would otherwise stay frozen at whatever it was at boot forever.
+decide_target() {
   if [ "$CHECKIN_OK" != "1" ]; then
     render_page "$FALLBACK_TEMPLATE" "$FALLBACK_RENDERED"
     echo "file://${FALLBACK_RENDERED}"
@@ -174,14 +181,15 @@ for _ in 1 2 3 4 5 6 7 8 9; do
   sleep 5
 done
 
-FIRST_TARGET="$(want_target)"
+FIRST_TARGET="$(decide_target)"
 log "initial target: $FIRST_TARGET"
 write_status "$FIRST_TARGET"
 
 # Watchdog: keep STATUS_FILE current, and restart Chromium if it dies.
 while true; do
   sleep "$CHECK_INTERVAL"
-  TARGET="$(want_target)"
+  checkin
+  TARGET="$(decide_target)"
   write_status "$TARGET"
   if ! kill -0 "$CHROMIUM_PID" 2>/dev/null; then
     log "chromium (pid $CHROMIUM_PID) is not running, relaunching"
