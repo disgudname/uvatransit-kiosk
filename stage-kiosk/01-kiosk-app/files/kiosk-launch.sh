@@ -18,6 +18,8 @@
 
 set -u
 
+log() { echo "[kiosk-launch] $(date +%T.%3N) $*"; }
+
 BASE_URL="https://utsopsdashboard.com/arrivalsdisplay"
 CHECKIN_ENDPOINT="https://utsopsdashboard.com/v1/kiosk-checkin"
 SITE_CODE_FILE="/boot/firmware/site-code.txt"
@@ -148,14 +150,17 @@ CHROMIUM_FLAGS="--kiosk --incognito --noerrdialogs --disable-infobars \
 CHROMIUM_PID=""
 
 launch_chromium() {
+  log "launching chromium"
   chromium $CHROMIUM_FLAGS "file://${LOADING_PAGE}" &
   CHROMIUM_PID=$!
+  log "chromium launched, pid=$CHROMIUM_PID"
 }
 
 # Chromium launches exactly once, always at loading.html - its own JS then
 # decides what's actually on screen via STATUS_FILE. From here this script's
 # only job is keeping STATUS_FILE current and relaunching Chromium if it
 # dies outright (crash recovery, not a target change).
+log "kiosk-launch.sh starting"
 launch_chromium
 
 # Initial grace period for WiFi/cellular to associate, so a normal boot
@@ -169,13 +174,17 @@ for _ in 1 2 3 4 5 6 7 8 9; do
   sleep 5
 done
 
-write_status "$(want_target)"
+FIRST_TARGET="$(want_target)"
+log "initial target: $FIRST_TARGET"
+write_status "$FIRST_TARGET"
 
 # Watchdog: keep STATUS_FILE current, and restart Chromium if it dies.
 while true; do
   sleep "$CHECK_INTERVAL"
-  write_status "$(want_target)"
+  TARGET="$(want_target)"
+  write_status "$TARGET"
   if ! kill -0 "$CHROMIUM_PID" 2>/dev/null; then
+    log "chromium (pid $CHROMIUM_PID) is not running, relaunching"
     launch_chromium
   fi
 done
