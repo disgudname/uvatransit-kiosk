@@ -12,9 +12,21 @@
 # under `startx` - see kiosk.service.
 #
 # The 03-splash stage's Plymouth theme covers the kernel-boot phase before
-# this script even runs, quitting at the normal systemd handoff point;
-# loading.html's overlay covers everything from there on, including the
-# entire process of figuring out what to actually show.
+# this script even runs, quitting at the normal systemd handoff point
+# (Plymouth and X both need exclusive control of the display, so Plymouth's
+# splash necessarily disappears the instant X starts - it can't be kept
+# alive through this next part). What covers the gap from there instead is
+# `feh` showing a branded image full-screen: confirmed live on the dev unit
+# that Chromium's own cold start - spinning up its GPU/zygote/renderer
+# processes - takes 10-15+ seconds on this hardware, and nothing can paint
+# real content on screen until that finishes, which is what caused the
+# black/white flicker loading.html alone couldn't cover (it's a page inside
+# Chromium, so it can't render anything before Chromium itself is ready
+# either). `feh` starts in milliseconds since it isn't Chromium, so it can
+# actually be on screen for that whole gap - see launch_boot_splash() below,
+# stopped only once Chromium's own DevTools Protocol confirms loading.html
+# has actually been navigated to (see wait_for_loading_html_ready()), not
+# just that the process exists.
 
 set -u
 
@@ -39,6 +51,36 @@ LOADING_PAGE="/etc/kiosk/loading.html"
 STATUS_FILE="/tmp/kiosk-status.json"
 WLAN_IFACE="wlan0"
 CHECK_INTERVAL=15
+CDP_PORT=9222
+BOOT_SPLASH_IMAGE="/etc/kiosk/kiosk-boot-splash.png"
+
+FEH_PID=""
+
+# Launched first, before even X housekeeping below, so it's on screen as
+# soon as physically possible after the Plymouth handoff. feh's fullscreen
+# windows are override-redirect, so this works with no window manager
+# running yet. Degrades safely (just no splash, straight to whatever X's
+# default background is) if feh isn't installed - lets this script keep
+# working on an image that hasn't been rebuilt with the feh package yet.
+launch_boot_splash() {
+  if ! command -v feh >/dev/null 2>&1; then
+    log "feh not installed, skipping boot splash overlay"
+    return
+  fi
+  feh --fullscreen --hide-pointer --image-bg '#232D4B' "$BOOT_SPLASH_IMAGE" &
+  FEH_PID=$!
+  log "boot splash (feh) launched, pid=$FEH_PID"
+}
+
+stop_boot_splash() {
+  [ -n "$FEH_PID" ] || return
+  kill "$FEH_PID" 2>/dev/null
+  wait "$FEH_PID" 2>/dev/null
+  log "boot splash (feh) stopped"
+  FEH_PID=""
+}
+
+launch_boot_splash
 
 xset s off
 xset s noblank
@@ -154,11 +196,17 @@ write_status() {
 # separate renderer process per origin as a defense against cross-site data
 # leaks, which costs real memory for no benefit on a kiosk that only ever
 # shows content inside one fixed, trusted top-level shell page.
+# --remote-debugging-port binds to 127.0.0.1 only (no
+# --remote-debugging-address override) - purely local, used below to ask
+# Chromium itself whether loading.html has actually loaded yet, not exposed
+# on the network. Adds no meaningful attack surface beyond what RustDesk's
+# full remote-desktop access already grants on this device.
 CHROMIUM_FLAGS="--kiosk --incognito --noerrdialogs --disable-infobars \
   --disable-session-crashed-bubble --disable-translate --no-first-run \
   --check-for-update-interval=31536000 --overscroll-history-navigation=0 \
   --autoplay-policy=no-user-gesture-required --window-position=0,0 \
-  --disable-features=IsolateOrigins,site-per-process"
+  --disable-features=IsolateOrigins,site-per-process \
+  --remote-debugging-port=${CDP_PORT}"
 
 CHROMIUM_PID=""
 
@@ -169,12 +217,35 @@ launch_chromium() {
   log "chromium launched, pid=$CHROMIUM_PID"
 }
 
+# Polls Chromium's own DevTools Protocol - which reports what Chromium
+# itself has actually navigated to, not a guess based on elapsed time -
+# until it sees a target whose url is loading.html. Bounded so a CDP hiccup
+# (port conflict, endpoint slow to bind) can never leave the boot splash
+# stuck on screen forever; on timeout it just gives up and reveals whatever
+# Chromium currently has anyway.
+wait_for_loading_html_ready() {
+  local deadline target_url
+  target_url="file://${LOADING_PAGE}"
+  deadline=$(( $(date +%s) + 25 ))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    if curl -fsS --max-time 1 "http://127.0.0.1:${CDP_PORT}/json" 2>/dev/null \
+      | jq -e --arg u "$target_url" 'any(.[]?; .url == $u)' >/dev/null 2>&1; then
+      log "loading.html confirmed rendered via CDP"
+      return
+    fi
+    sleep 0.3
+  done
+  log "timed out waiting for CDP confirmation of loading.html, revealing anyway"
+}
+
 # Chromium launches exactly once, always at loading.html - its own JS then
 # decides what's actually on screen via STATUS_FILE. From here this script's
 # only job is keeping STATUS_FILE current and relaunching Chromium if it
 # dies outright (crash recovery, not a target change).
 log "kiosk-launch.sh starting"
 launch_chromium
+wait_for_loading_html_ready
+stop_boot_splash
 
 # Initial grace period for WiFi/cellular to associate, so a normal boot
 # doesn't briefly surface the "not connected" fallback before settling on
@@ -199,6 +270,9 @@ while true; do
   write_status "$TARGET"
   if ! kill -0 "$CHROMIUM_PID" 2>/dev/null; then
     log "chromium (pid $CHROMIUM_PID) is not running, relaunching"
+    launch_boot_splash
     launch_chromium
+    wait_for_loading_html_ready
+    stop_boot_splash
   fi
 done

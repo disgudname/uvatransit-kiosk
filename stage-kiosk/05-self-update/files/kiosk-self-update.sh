@@ -1,7 +1,8 @@
 #!/bin/bash
-# Pulls the latest kiosk app files (kiosk-launch.sh, the status server, and
-# the fallback/loading pages) from the public uvatransit-kiosk repo, on
-# whichever branch matches this device's dashboard-assigned channel
+# Pulls the latest kiosk app files (kiosk-launch.sh, the status server, the
+# fallback/loading pages, and the boot splash image) from the public
+# uvatransit-kiosk repo, on whichever branch matches this device's
+# dashboard-assigned channel
 # (dev/prod - read from kiosk-launch.sh's local status API, the same one
 # loading.html polls, so this needs no separate check-in call of its own),
 # and restarts the affected services if anything changed. Run periodically
@@ -58,6 +59,7 @@ install -v -m 755 -o root -g root "$SRC/kiosk-launch.sh" /etc/kiosk/kiosk-launch
 install -v -m 644 -o root -g root "$SRC/mac-fallback.html" /etc/kiosk/mac-fallback.html
 install -v -m 644 -o root -g root "$SRC/not-registered.html" /etc/kiosk/not-registered.html
 install -v -m 644 -o root -g root "$SRC/loading.html" /etc/kiosk/loading.html
+install -v -m 644 -o root -g root "$SRC/kiosk-boot-splash.png" /etc/kiosk/kiosk-boot-splash.png
 install -v -m 755 -o root -g root "$SRC/kiosk-status-server.py" /etc/kiosk/kiosk-status-server.py
 
 echo "$NEW_SHA" > "$APP_VERSION_FILE"

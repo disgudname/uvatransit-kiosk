@@ -12,3 +12,4 @@ curl
 ca-certificates
 jq
 python3
+feh
