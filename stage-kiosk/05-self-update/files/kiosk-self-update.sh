@@ -1,10 +1,11 @@
 #!/bin/bash
-# Pulls the latest kiosk app files (kiosk-launch.sh + fallback/loading pages)
-# from the public uvatransit-kiosk repo, on whichever branch matches this
-# device's dashboard-assigned channel (dev/prod - see kiosk-launch.sh's
-# checkin(), which writes CHANNEL_FILE on every poll), and restarts
-# kiosk.service if anything changed. Run periodically by
-# kiosk-self-update.timer.
+# Pulls the latest kiosk app files (kiosk-launch.sh, the status server, and
+# the fallback/loading pages) from the public uvatransit-kiosk repo, on
+# whichever branch matches this device's dashboard-assigned channel
+# (dev/prod - read from kiosk-launch.sh's local status API, the same one
+# loading.html polls, so this needs no separate check-in call of its own),
+# and restarts the affected services if anything changed. Run periodically
+# by kiosk-self-update.timer.
 #
 # Deliberately scoped to just the app layer: services, sysctls, WiFi config,
 # RustDesk provisioning, and the Plymouth theme are build-time-only and still
@@ -16,13 +17,13 @@ set -u
 
 REPO_DIR="/opt/uvatransit-kiosk"
 REPO_URL="https://github.com/disgudname/uvatransit-kiosk.git"
-CHANNEL_FILE="/tmp/kiosk-channel"
+STATUS_URL="http://127.0.0.1:8765/status.json"
 DEFAULT_CHANNEL="prod"
 APP_VERSION_FILE="/etc/kiosk/app-version.txt"
 
 log() { echo "[kiosk-self-update] $*"; }
 
-CHANNEL="$(tr -d '[:space:]' < "$CHANNEL_FILE" 2>/dev/null || true)"
+CHANNEL="$(curl -fsS --max-time 2 "$STATUS_URL" 2>/dev/null | jq -r '.channel // empty' 2>/dev/null || true)"
 case "$CHANNEL" in
   dev|prod) ;;
   *) CHANNEL="$DEFAULT_CHANNEL" ;;
@@ -57,8 +58,10 @@ install -v -m 755 -o root -g root "$SRC/kiosk-launch.sh" /etc/kiosk/kiosk-launch
 install -v -m 644 -o root -g root "$SRC/mac-fallback.html" /etc/kiosk/mac-fallback.html
 install -v -m 644 -o root -g root "$SRC/not-registered.html" /etc/kiosk/not-registered.html
 install -v -m 644 -o root -g root "$SRC/loading.html" /etc/kiosk/loading.html
+install -v -m 755 -o root -g root "$SRC/kiosk-status-server.py" /etc/kiosk/kiosk-status-server.py
 
 echo "$NEW_SHA" > "$APP_VERSION_FILE"
 
-log "restarting kiosk.service"
+log "restarting kiosk.service and kiosk-status-server.service"
+systemctl restart kiosk-status-server.service
 systemctl restart kiosk.service

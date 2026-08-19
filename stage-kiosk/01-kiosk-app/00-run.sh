@@ -6,6 +6,11 @@ install -v -m 755 -o root -g root files/kiosk-launch.sh "${ROOTFS_DIR}/etc/kiosk
 install -v -m 644 -o root -g root files/mac-fallback.html "${ROOTFS_DIR}/etc/kiosk/mac-fallback.html"
 install -v -m 644 -o root -g root files/not-registered.html "${ROOTFS_DIR}/etc/kiosk/not-registered.html"
 install -v -m 644 -o root -g root files/loading.html "${ROOTFS_DIR}/etc/kiosk/loading.html"
+install -v -m 755 -o root -g root files/kiosk-status-server.py "${ROOTFS_DIR}/etc/kiosk/kiosk-status-server.py"
+
+sed "s/KIOSK_USER_PLACEHOLDER/${FIRST_USER_NAME}/g" files/kiosk-status-server.service \
+	> "${ROOTFS_DIR}/etc/systemd/system/kiosk-status-server.service"
+chmod 644 "${ROOTFS_DIR}/etc/systemd/system/kiosk-status-server.service"
 
 # Records when this specific image was built, reported to the dashboard on
 # every check-in so a device's running image version is visible fleet-wide.

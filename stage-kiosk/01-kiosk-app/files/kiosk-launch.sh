@@ -1,15 +1,20 @@
 #!/bin/bash
-# Kiosk xinitrc: launches matchbox + Chromium pointed at the arrivals dashboard,
-# falling back to a "not connected" page (showing this Pi's WiFi MAC address, for
-# allowlisting on the wahoo network) until the network comes up, or a "not
-# registered" page if it's online but the dashboard has no site assigned to this
-# device's MAC yet. Runs as the X client under `startx` - see kiosk.service.
+# Kiosk xinitrc: launches matchbox + a single, persistent Chromium instance
+# showing loading.html, which hosts a full-viewport <iframe> that this
+# script redirects by writing STATUS_FILE (polled by loading.html's JS over
+# HTTP via kiosk-status-server.py - Chromium's fetch() doesn't support
+# file:// and XHR-to-file:// needs a flag whose behavior isn't worth
+# depending on). loading.html keeps its own splash opaque over the iframe
+# until the new content has actually finished loading, so there is never a
+# black-root/white-Chromium-relaunch flash on screen when the target
+# changes - previously this script killed and relaunched Chromium itself
+# for every change, which is exactly what caused that. Runs as the X client
+# under `startx` - see kiosk.service.
 #
-# Shows a branded "starting up" loading page immediately (the 03-splash stage's
-# Plymouth theme covers the kernel-boot phase before this script even runs, but
-# quits at the normal systemd handoff point - this page covers the gap from
-# there until the first check-in result is known, so there's never a plain
-# black screen at any point in the boot sequence).
+# The 03-splash stage's Plymouth theme covers the kernel-boot phase before
+# this script even runs, quitting at the normal systemd handoff point;
+# loading.html's overlay covers everything from there on, including the
+# entire process of figuring out what to actually show.
 
 set -u
 
@@ -23,7 +28,7 @@ FALLBACK_RENDERED="/tmp/kiosk-mac-fallback.html"
 NOT_REGISTERED_TEMPLATE="/etc/kiosk/not-registered.html"
 NOT_REGISTERED_RENDERED="/tmp/kiosk-not-registered.html"
 LOADING_PAGE="/etc/kiosk/loading.html"
-CHANNEL_FILE="/tmp/kiosk-channel"
+STATUS_FILE="/tmp/kiosk-status.json"
 WLAN_IFACE="wlan0"
 CHECK_INTERVAL=15
 
@@ -56,17 +61,16 @@ render_page() {
 # Checks in with the dashboard, reporting this device's identity and getting
 # back whatever it's been assigned. Sets CHECKIN_OK (whether the request itself
 # succeeded - i.e. is there a network at all), CHECKIN_SITE_CODE (empty if no
-# site assigned yet - a normal, successful response, not a failure), and
+# site assigned yet - a normal, successful response, not a failure),
 # CHECKIN_DISPLAY_URL (a full URL override for non-bus-stop kiosks, e.g. a
-# training-office display showing a spreadsheet instead of arrivals - empty for
-# the common case). Also drops the dashboard-assigned update channel
-# (dev/prod) into CHANNEL_FILE on every successful poll, for
-# kiosk-self-update.sh to read - piggybacking on this existing poll instead of
-# a second independent check-in call. Left untouched (not cleared) on a failed
-# poll, so self-update keeps using the last known-good channel while offline.
+# training-office display showing a spreadsheet instead of arrivals - empty
+# for the common case), and CHECKIN_CHANNEL (dev/prod - published via
+# STATUS_FILE below for kiosk-self-update.sh to read over the same local
+# HTTP endpoint, no separate check-in call needed).
 CHECKIN_OK=0
 CHECKIN_SITE_CODE=""
 CHECKIN_DISPLAY_URL=""
+CHECKIN_CHANNEL="prod"
 checkin() {
   local payload response
   payload="$(jq -n \
@@ -80,7 +84,7 @@ checkin() {
     CHECKIN_OK=1
     CHECKIN_SITE_CODE="$(jq -r '.site_code // empty' <<< "$response")"
     CHECKIN_DISPLAY_URL="$(jq -r '.url // empty' <<< "$response")"
-    jq -r '.channel // "prod"' <<< "$response" > "$CHANNEL_FILE"
+    CHECKIN_CHANNEL="$(jq -r '.channel // "prod"' <<< "$response")"
   else
     CHECKIN_OK=0
     CHECKIN_SITE_CODE=""
@@ -88,10 +92,10 @@ checkin() {
   fi
 }
 
-# Decides what Chromium should be pointed at right now, in priority order: a
-# full URL override from the dashboard (non-bus-stop kiosks), the arrivals
-# dashboard for the site code the dashboard assigned, the local site-code.txt
-# fallback if the dashboard hasn't assigned anything, the "not registered" page
+# Decides what should be showing right now, in priority order: a full URL
+# override from the dashboard (non-bus-stop kiosks), the arrivals dashboard
+# for the site code the dashboard assigned, the local site-code.txt fallback
+# if the dashboard hasn't assigned anything, the "not registered" page
 # (online, but nothing assigned at all), or the "not connected" page (the
 # check-in request itself couldn't reach the dashboard).
 want_target() {
@@ -119,60 +123,59 @@ want_target() {
   echo "file://${NOT_REGISTERED_RENDERED}"
 }
 
+# Publishes the current decision for loading.html to pick up. Atomic
+# write (tmp + rename) so kiosk-status-server.py never serves a
+# half-written file mid-update.
+write_status() {
+  jq -n --arg target "$1" --arg channel "$CHECKIN_CHANNEL" \
+    '{target: $target, channel: $channel}' > "${STATUS_FILE}.tmp"
+  mv "${STATUS_FILE}.tmp" "$STATUS_FILE"
+}
+
 # chrome://gpu confirmed GPU rasterization/compositing are already hardware
 # accelerated by default on this build (Debian's packaged Chromium already
 # passes --enable-gpu-rasterization/--use-angle=gles itself) - no override
 # needed there. The last line instead disables Site Isolation: it spawns a
 # separate renderer process per origin as a defense against cross-site data
 # leaks, which costs real memory for no benefit on a kiosk that only ever
-# shows one fixed, trusted, same-origin page with no user-driven navigation.
+# shows content inside one fixed, trusted top-level shell page.
 CHROMIUM_FLAGS="--kiosk --incognito --noerrdialogs --disable-infobars \
   --disable-session-crashed-bubble --disable-translate --no-first-run \
   --check-for-update-interval=31536000 --overscroll-history-navigation=0 \
   --autoplay-policy=no-user-gesture-required --window-position=0,0 \
   --disable-features=IsolateOrigins,site-per-process"
 
-CURRENT_TARGET=""
 CHROMIUM_PID=""
 
 launch_chromium() {
-  local target="$1"
-  chromium $CHROMIUM_FLAGS "$target" &
+  chromium $CHROMIUM_FLAGS "file://${LOADING_PAGE}" &
   CHROMIUM_PID=$!
-  CURRENT_TARGET="$target"
 }
 
-# Show the loading page immediately, so there's something branded on screen
-# the moment X starts rather than a blank window while the grace period below
-# runs.
-launch_chromium "file://${LOADING_PAGE}"
+# Chromium launches exactly once, always at loading.html - its own JS then
+# decides what's actually on screen via STATUS_FILE. From here this script's
+# only job is keeping STATUS_FILE current and relaunching Chromium if it
+# dies outright (crash recovery, not a target change).
+launch_chromium
 
-# Initial grace period for WiFi/cellular to associate, so a normal boot doesn't
-# flash the fallback page before settling on the real dashboard.
+# Initial grace period for WiFi/cellular to associate, so a normal boot
+# doesn't briefly surface the "not connected" fallback before settling on
+# the real dashboard. loading.html's splash covers this whole wait either
+# way (STATUS_FILE doesn't exist yet, so the overlay just stays up), so
+# there's no real cost to waiting the full period out here.
 for _ in 1 2 3 4 5 6 7 8 9; do
   checkin
   [ "$CHECKIN_OK" = "1" ] && break
   sleep 5
 done
 
-WANT_TARGET="$(want_target)"
-kill "$CHROMIUM_PID" 2>/dev/null
-wait "$CHROMIUM_PID" 2>/dev/null
-launch_chromium "$WANT_TARGET"
+write_status "$(want_target)"
 
-# Watchdog: restart Chromium if it dies, and flip between the dashboard, the
-# not-connected page, and the not-registered page as check-in results change -
-# no reboot required either way.
+# Watchdog: keep STATUS_FILE current, and restart Chromium if it dies.
 while true; do
   sleep "$CHECK_INTERVAL"
-
-  WANT_TARGET="$(want_target)"
-
+  write_status "$(want_target)"
   if ! kill -0 "$CHROMIUM_PID" 2>/dev/null; then
-    launch_chromium "$WANT_TARGET"
-  elif [ "$WANT_TARGET" != "$CURRENT_TARGET" ]; then
-    kill "$CHROMIUM_PID" 2>/dev/null
-    wait "$CHROMIUM_PID" 2>/dev/null
-    launch_chromium "$WANT_TARGET"
+    launch_chromium
   fi
 done

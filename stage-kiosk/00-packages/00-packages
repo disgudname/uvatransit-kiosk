@@ -11,3 +11,4 @@ cron
 curl
 ca-certificates
 jq
+python3

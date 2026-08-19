@@ -1,0 +1,12 @@
+[Unit]
+Description=Local status API for the kiosk shell page (loading.html)
+After=network.target
+
+[Service]
+User=KIOSK_USER_PLACEHOLDER
+ExecStart=/usr/bin/python3 /etc/kiosk/kiosk-status-server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
