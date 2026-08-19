@@ -18,7 +18,13 @@
 
 set -u
 
-log() { echo "[kiosk-launch] $(date +%T.%3N) $*"; }
+# Goes through logger, not plain echo - startx doesn't route this script's
+# own stdout to kiosk.service's journal the way it does a child process's
+# stderr (confirmed live: unclutter's usage-error output showed up in
+# `journalctl -u kiosk.service`, this function's echo output never did),
+# and logger sidesteps that entirely by opening its own connection to the
+# journal instead of relying on inherited file descriptors.
+log() { logger -t kiosk-launch "$*"; }
 
 BASE_URL="https://utsopsdashboard.com/arrivalsdisplay"
 CHECKIN_ENDPOINT="https://utsopsdashboard.com/v1/kiosk-checkin"
@@ -37,7 +43,7 @@ CHECK_INTERVAL=15
 xset s off
 xset s noblank
 xset -dpms
-unclutter --timeout 1 --jitter 5 --ignore-scrolling &
+unclutter -idle 1 -jitter 5 &
 matchbox-window-manager -use_cursor no &
 
 get_mac() {
