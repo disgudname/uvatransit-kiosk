@@ -1,5 +1,5 @@
 [Unit]
-Description=Local status API for the kiosk shell page (loading.html)
+Description=Local status API for kiosk-self-update.sh's channel lookup
 After=network.target
 
 [Service]

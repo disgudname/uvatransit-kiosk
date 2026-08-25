@@ -1,15 +1,19 @@
 #!/bin/bash
-# Kiosk xinitrc: launches matchbox + a single, persistent Chromium instance
-# showing loading.html, which hosts a full-viewport <iframe> that this
-# script redirects by writing STATUS_FILE (polled by loading.html's JS over
-# HTTP via kiosk-status-server.py - Chromium's fetch() doesn't support
-# file:// and XHR-to-file:// needs a flag whose behavior isn't worth
-# depending on). loading.html keeps its own splash opaque over the iframe
-# until the new content has actually finished loading, so there is never a
-# black-root/white-Chromium-relaunch flash on screen when the target
-# changes - previously this script killed and relaunched Chromium itself
-# for every change, which is exactly what caused that. Runs as the X client
-# under `startx` - see kiosk.service.
+# Kiosk xinitrc: launches matchbox + a single, persistent Chromium instance.
+# Chromium launches once, pointed at loading.html (a plain splash, no
+# iframe), and this script swaps what's actually on screen by opening the
+# real target as a genuine top-level tab (via cdp-tab-swap.py's use of
+# Chromium's CDP HTTP endpoints), waiting for it to finish loading, then
+# activating it and closing whatever tab was showing before. This used to
+# go through a full-viewport <iframe> inside loading.html instead - that
+# gave the same "no flash on target change" property, but some sites (e.g.
+# UVA's own signage CMS) send X-Frame-Options and simply refuse to render
+# inside anyone else's frame, which broke displaying them at all. Real
+# top-level tabs have no such restriction. Before the iframe, this script
+# just killed and relaunched Chromium itself for every target change, which
+# is what caused the original black/white flash - going back to that
+# wasn't necessary once tab-swapping-in-place was possible. Runs as the X
+# client under `startx` - see kiosk.service.
 #
 # The 03-splash stage's Plymouth theme covers the kernel-boot phase before
 # this script even runs, quitting at the normal systemd handoff point
@@ -47,12 +51,25 @@ FALLBACK_TEMPLATE="/etc/kiosk/mac-fallback.html"
 FALLBACK_RENDERED="/tmp/kiosk-mac-fallback.html"
 NOT_REGISTERED_TEMPLATE="/etc/kiosk/not-registered.html"
 NOT_REGISTERED_RENDERED="/tmp/kiosk-not-registered.html"
+DASHBOARD_DOWN_TEMPLATE="/etc/kiosk/dashboard-down.html"
+DASHBOARD_DOWN_RENDERED="/tmp/kiosk-dashboard-down.html"
 LOADING_PAGE="/etc/kiosk/loading.html"
 STATUS_FILE="/tmp/kiosk-status.json"
 WLAN_IFACE="wlan0"
 CHECK_INTERVAL=15
 CDP_PORT=9222
+CDP_TAB_SWAP="/etc/kiosk/cdp-tab-swap.py"
+SWAP_TIMEOUT=15
 BOOT_SPLASH_IMAGE="/etc/kiosk/kiosk-boot-splash.png"
+# Used only to tell "no internet at all" apart from "internet's fine, but
+# utsopsdashboard.com itself isn't answering" when checkin() fails - plain
+# IPs, not hostnames, so this doesn't depend on DNS working. Three of them
+# (two providers) so one outage/blackhole among them can't cause a false
+# "not connected" reading. Checked over HTTPS via curl (not ping/ICMP):
+# no new package dependency beyond what's already installed, and some
+# networks filter ICMP separately from HTTPS, which would give a false
+# "not connected" reading on a network that's actually fine.
+KNOWN_GOOD_IPS="1.1.1.1 1.0.0.1 8.8.8.8"
 
 FEH_PID=""
 
@@ -104,6 +121,20 @@ dashboard_url() {
   echo "${BASE_URL}?code=$1"
 }
 
+# Probes a couple of known-good IPs (not the dashboard) to tell a real
+# connectivity problem apart from the dashboard itself being down/unreachable
+# (deploy issue, outage, etc). Any single response is enough - this only
+# needs to answer "is there a path to the internet at all".
+internet_reachable() {
+  local ip
+  for ip in $KNOWN_GOOD_IPS; do
+    if curl -sS -k --max-time 3 -o /dev/null "https://${ip}/"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 render_page() {
   sed -e "s/{{MAC}}/$(get_mac)/g" -e "s/{{HOSTNAME}}/$(hostname)/g" "$1" > "$2"
 }
@@ -146,8 +177,10 @@ checkin() {
 # override from the dashboard (non-bus-stop kiosks), the arrivals dashboard
 # for the site code the dashboard assigned, the local site-code.txt fallback
 # if the dashboard hasn't assigned anything, the "not registered" page
-# (online, but nothing assigned at all), or the "not connected" page (the
-# check-in request itself couldn't reach the dashboard). Reads whatever
+# (online, but nothing assigned at all), or - if the check-in request itself
+# failed - either the "dashboard unreachable" page (internet's fine, just
+# utsopsdashboard.com isn't answering) or the "not connected" page (no
+# internet at all), decided by internet_reachable(). Reads whatever
 # checkin() last set rather than calling it itself - every caller captures
 # this function's output via `$(...)`, which forks a subshell, and a
 # checkin() called from inside that subshell would set CHECKIN_CHANNEL in a
@@ -158,8 +191,13 @@ checkin() {
 # where it would otherwise stay frozen at whatever it was at boot forever.
 decide_target() {
   if [ "$CHECKIN_OK" != "1" ]; then
-    render_page "$FALLBACK_TEMPLATE" "$FALLBACK_RENDERED"
-    echo "file://${FALLBACK_RENDERED}"
+    if internet_reachable; then
+      render_page "$DASHBOARD_DOWN_TEMPLATE" "$DASHBOARD_DOWN_RENDERED"
+      echo "file://${DASHBOARD_DOWN_RENDERED}"
+    else
+      render_page "$FALLBACK_TEMPLATE" "$FALLBACK_RENDERED"
+      echo "file://${FALLBACK_RENDERED}"
+    fi
     return
   fi
   if [ -n "$CHECKIN_DISPLAY_URL" ]; then
@@ -180,13 +218,55 @@ decide_target() {
   echo "file://${NOT_REGISTERED_RENDERED}"
 }
 
-# Publishes the current decision for loading.html to pick up. Atomic
-# write (tmp + rename) so kiosk-status-server.py never serves a
-# half-written file mid-update.
+# Publishes the current decision. loading.html no longer reads this (see
+# swap_to() below for how the actual on-screen tab changes now) - this
+# purely exists so kiosk-self-update.sh can read CHECKIN_CHANNEL over the
+# same local HTTP endpoint without a separate check-in call of its own, plus
+# it's a handy `curl 127.0.0.1:8765/status.json` for debugging what this
+# script currently thinks should be showing. Atomic write (tmp + rename) so
+# kiosk-status-server.py never serves a half-written file mid-update.
 write_status() {
   jq -n --arg target "$1" --arg channel "$CHECKIN_CHANNEL" \
     '{target: $target, channel: $channel}' > "${STATUS_FILE}.tmp"
   mv "${STATUS_FILE}.tmp" "$STATUS_FILE"
+}
+
+# Finds the tab CDP-wise ID of whatever's currently showing loading.html -
+# used as the "old" tab to close once the first real target is ready to
+# swap in.
+get_loading_tab_id() {
+  curl -fsS --max-time 2 "http://127.0.0.1:${CDP_PORT}/json" 2>/dev/null \
+    | jq -r --arg u "file://${LOADING_PAGE}" '[.[] | select(.url == $u)][0].id // empty'
+}
+
+CURRENT_TARGET=""
+CURRENT_TAB_ID=""
+
+# Swaps the on-screen tab to $1 by opening it as a genuine new top-level tab,
+# waiting for it to load, activating it, and closing whatever tab
+# CURRENT_TAB_ID points at - see cdp-tab-swap.py for why this needs a real
+# CDP WebSocket connection rather than just the HTTP /json endpoints. Leaves
+# CURRENT_TARGET/CURRENT_TAB_ID untouched on failure (logged, not fatal) so
+# whatever's already on screen just keeps showing rather than getting stuck
+# mid-swap - the next watchdog tick will simply try again if the target is
+# still supposed to change.
+swap_to() {
+  local target="$1" new_id log_output
+  # 2>&1 1>file swaps the streams: cdp-tab-swap.py's log lines (stderr) end
+  # up in $log_output via this command substitution, while its one line of
+  # real output - the new tab's id (stdout) - lands in the file instead.
+  log_output="$(python3 "$CDP_TAB_SWAP" --port "$CDP_PORT" --url "$target" \
+    ${CURRENT_TAB_ID:+--old-id "$CURRENT_TAB_ID"} --timeout "$SWAP_TIMEOUT" \
+    2>&1 1>/tmp/kiosk-cdp-new-id)"
+  [ -n "$log_output" ] && log "cdp-tab-swap: $log_output"
+  new_id="$(cat /tmp/kiosk-cdp-new-id 2>/dev/null)"
+  if [ -n "$new_id" ]; then
+    CURRENT_TAB_ID="$new_id"
+    CURRENT_TARGET="$target"
+    log "swapped to $target (tab $new_id)"
+  else
+    log "tab swap to $target failed, leaving current tab showing"
+  fi
 }
 
 # chrome://gpu confirmed GPU rasterization/compositing are already hardware
@@ -201,11 +281,13 @@ write_status() {
 # Chromium itself whether loading.html has actually loaded yet, not exposed
 # on the network. Adds no meaningful attack surface beyond what RustDesk's
 # full remote-desktop access already grants on this device.
+# --mute-audio: kiosk displays aren't meant to have sound (2026-08-25) - one
+# flag, trivially reversible by dropping it and rebuilding.
 CHROMIUM_FLAGS="--kiosk --incognito --noerrdialogs --disable-infobars \
   --disable-session-crashed-bubble --disable-translate --no-first-run \
   --check-for-update-interval=31536000 --overscroll-history-navigation=0 \
   --autoplay-policy=no-user-gesture-required --window-position=0,0 \
-  --disable-features=IsolateOrigins,site-per-process \
+  --disable-features=IsolateOrigins,site-per-process --mute-audio \
   --remote-debugging-port=${CDP_PORT}"
 
 CHROMIUM_PID=""
@@ -238,10 +320,9 @@ wait_for_loading_html_ready() {
   log "timed out waiting for CDP confirmation of loading.html, revealing anyway"
 }
 
-# Chromium launches exactly once, always at loading.html - its own JS then
-# decides what's actually on screen via STATUS_FILE. From here this script's
-# only job is keeping STATUS_FILE current and relaunching Chromium if it
-# dies outright (crash recovery, not a target change).
+# Chromium launches exactly once, always at loading.html - decide_target()
+# and swap_to() below are what actually put the real target on screen, and
+# keep it current as long as this script keeps running.
 log "kiosk-launch.sh starting"
 launch_chromium
 wait_for_loading_html_ready
@@ -249,9 +330,9 @@ stop_boot_splash
 
 # Initial grace period for WiFi/cellular to associate, so a normal boot
 # doesn't briefly surface the "not connected" fallback before settling on
-# the real dashboard. loading.html's splash covers this whole wait either
-# way (STATUS_FILE doesn't exist yet, so the overlay just stays up), so
-# there's no real cost to waiting the full period out here.
+# the real dashboard. loading.html just sits there showing the splash until
+# the first swap_to() call below, so there's no real cost to waiting the
+# full period out here.
 for _ in 1 2 3 4 5 6 7 8 9; do
   checkin
   [ "$CHECKIN_OK" = "1" ] && break
@@ -261,8 +342,14 @@ done
 FIRST_TARGET="$(decide_target)"
 log "initial target: $FIRST_TARGET"
 write_status "$FIRST_TARGET"
+CURRENT_TAB_ID="$(get_loading_tab_id)"
+swap_to "$FIRST_TARGET"
 
-# Watchdog: keep STATUS_FILE current, and restart Chromium if it dies.
+# Watchdog: keep STATUS_FILE current, swap the on-screen tab when the
+# decided target actually changes, and restart Chromium from scratch if it
+# dies outright (crash recovery, not a target change - a dead Chromium
+# process takes every tab down with it, so this re-runs the same
+# loading.html -> swap_to() sequence as a fresh boot).
 while true; do
   sleep "$CHECK_INTERVAL"
   checkin
@@ -274,5 +361,10 @@ while true; do
     launch_chromium
     wait_for_loading_html_ready
     stop_boot_splash
+    CURRENT_TARGET=""
+    CURRENT_TAB_ID="$(get_loading_tab_id)"
+    swap_to "$TARGET"
+  elif [ "$TARGET" != "$CURRENT_TARGET" ]; then
+    swap_to "$TARGET"
   fi
 done

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dashboard unreachable</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #14171a;
+    color: #f2f2f2;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .card {
+    text-align: center;
+    padding: 3vw;
+  }
+  h1 {
+    font-size: 4vw;
+    margin: 0 0 1vw;
+    color: #ff6b6b;
+  }
+  p {
+    font-size: 1.6vw;
+    color: #b7bcc2;
+    margin: 0.5vw 0;
+  }
+  .hostname {
+    margin-top: 1.5vw;
+    font-size: 1.4vw;
+    color: #6b7280;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Can't reach the ops dashboard</h1>
+    <p>This display has a working internet connection, but utsopsdashboard.com isn't responding.</p>
+    <p>This is a server-side problem, not this display's network - no action needed here.</p>
+    <p class="hostname">{{HOSTNAME}} &middot; will switch to the dashboard automatically once it's back</p>
+  </div>
+</body>
+</html>

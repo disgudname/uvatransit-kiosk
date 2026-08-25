@@ -58,9 +58,11 @@ SRC="$REPO_DIR/stage-kiosk/01-kiosk-app/files"
 install -v -m 755 -o root -g root "$SRC/kiosk-launch.sh" /etc/kiosk/kiosk-launch.sh
 install -v -m 644 -o root -g root "$SRC/mac-fallback.html" /etc/kiosk/mac-fallback.html
 install -v -m 644 -o root -g root "$SRC/not-registered.html" /etc/kiosk/not-registered.html
+install -v -m 644 -o root -g root "$SRC/dashboard-down.html" /etc/kiosk/dashboard-down.html
 install -v -m 644 -o root -g root "$SRC/loading.html" /etc/kiosk/loading.html
 install -v -m 644 -o root -g root "$SRC/kiosk-boot-splash.png" /etc/kiosk/kiosk-boot-splash.png
 install -v -m 755 -o root -g root "$SRC/kiosk-status-server.py" /etc/kiosk/kiosk-status-server.py
+install -v -m 755 -o root -g root "$SRC/cdp-tab-swap.py" /etc/kiosk/cdp-tab-swap.py
 
 echo "$NEW_SHA" > "$APP_VERSION_FILE"
 
