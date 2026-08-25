@@ -1,19 +1,35 @@
 #!/bin/bash
 # Kiosk xinitrc: launches matchbox + a single, persistent Chromium instance.
 # Chromium launches once, pointed at loading.html (a plain splash, no
-# iframe), and this script swaps what's actually on screen by opening the
-# real target as a genuine top-level tab (via cdp-tab-swap.py's use of
-# Chromium's CDP HTTP endpoints), waiting for it to finish loading, then
-# activating it and closing whatever tab was showing before. This used to
-# go through a full-viewport <iframe> inside loading.html instead - that
-# gave the same "no flash on target change" property, but some sites (e.g.
-# UVA's own signage CMS) send X-Frame-Options and simply refuse to render
-# inside anyone else's frame, which broke displaying them at all. Real
-# top-level tabs have no such restriction. Before the iframe, this script
-# just killed and relaunched Chromium itself for every target change, which
-# is what caused the original black/white flash - going back to that
-# wasn't necessary once tab-swapping-in-place was possible. Runs as the X
-# client under `startx` - see kiosk.service.
+# iframe), in --kiosk mode - and this script changes what's on screen by
+# navigating that exact same tab in place via cdp-navigate.py's use of a CDP
+# WebSocket connection (Page.navigate), never by opening a new tab/window
+# and never by relaunching Chromium.
+#
+# Two things this used to do instead, both tried and both broken:
+#   - A full-viewport <iframe> inside loading.html, redirected by writing a
+#     status file for its JS to poll. Some sites (e.g. UVA's own signage
+#     CMS) send X-Frame-Options and simply refuse to render inside anyone
+#     else's frame, which broke displaying them at all.
+#   - Dropping the iframe but opening each new target as a second CDP tab
+#     (via /json/new), then activating it and closing the old one - no
+#     iframe involved, so no X-Frame-Options problem, but --kiosk mode's
+#     chrome-less fullscreen styling only applies to the one window
+#     Chromium creates at launch from the --kiosk flag. A tab/window opened
+#     afterward via DevTools Protocol doesn't inherit it, so it came up as
+#     an ordinary window with the OS's own window frame and Chromium's own
+#     tab strip/address bar visible - confirmed live on the dev unit
+#     (2026-08-25).
+#
+# Navigating the one already-kiosk tab in place can't hit either problem:
+# there's no iframe, and no second window/tab is ever created. The
+# trade-off is a brief loading moment on every target change instead of a
+# seamless cross-fade - but it's just a page navigation on an
+# already-warm renderer, nowhere near the multi-second black/white flash a
+# full Chromium relaunch causes on this hardware, which is what happens on
+# a crash (see the watchdog loop at the bottom) and is the actual case this
+# script still avoids doing unless Chromium has genuinely died. Runs as
+# the X client under `startx` - see kiosk.service.
 #
 # The 03-splash stage's Plymouth theme covers the kernel-boot phase before
 # this script even runs, quitting at the normal systemd handoff point
@@ -58,7 +74,7 @@ STATUS_FILE="/tmp/kiosk-status.json"
 WLAN_IFACE="wlan0"
 CHECK_INTERVAL=15
 CDP_PORT=9222
-CDP_TAB_SWAP="/etc/kiosk/cdp-tab-swap.py"
+CDP_NAVIGATE="/etc/kiosk/cdp-navigate.py"
 SWAP_TIMEOUT=15
 BOOT_SPLASH_IMAGE="/etc/kiosk/kiosk-boot-splash.png"
 # Used only to tell "no internet at all" apart from "internet's fine, but
@@ -231,41 +247,36 @@ write_status() {
   mv "${STATUS_FILE}.tmp" "$STATUS_FILE"
 }
 
-# Finds the tab CDP-wise ID of whatever's currently showing loading.html -
-# used as the "old" tab to close once the first real target is ready to
-# swap in.
+# Finds the CDP id of Chromium's one and only tab, right after a fresh
+# launch (initial boot or crash-relaunch) when it's guaranteed to still be
+# showing loading.html - cdp-navigate.py needs this id for every subsequent
+# navigation, and there's never a second tab to disambiguate against.
 get_loading_tab_id() {
   curl -fsS --max-time 2 "http://127.0.0.1:${CDP_PORT}/json" 2>/dev/null \
     | jq -r --arg u "file://${LOADING_PAGE}" '[.[] | select(.url == $u)][0].id // empty'
 }
 
 CURRENT_TARGET=""
-CURRENT_TAB_ID=""
+CDP_TAB_ID=""
 
-# Swaps the on-screen tab to $1 by opening it as a genuine new top-level tab,
-# waiting for it to load, activating it, and closing whatever tab
-# CURRENT_TAB_ID points at - see cdp-tab-swap.py for why this needs a real
-# CDP WebSocket connection rather than just the HTTP /json endpoints. Leaves
-# CURRENT_TARGET/CURRENT_TAB_ID untouched on failure (logged, not fatal) so
-# whatever's already on screen just keeps showing rather than getting stuck
-# mid-swap - the next watchdog tick will simply try again if the target is
-# still supposed to change.
+# Navigates Chromium's one tab (CDP_TAB_ID) to $1 in place - see
+# cdp-navigate.py for why this needs a real CDP WebSocket connection rather
+# than just the HTTP /json endpoints, and for why this script never opens a
+# second tab/window instead. Leaves CURRENT_TARGET untouched on failure
+# (logged, not fatal) so whatever's already on screen just keeps showing
+# rather than getting stuck mid-navigation - the next watchdog tick will
+# simply try again if the target is still supposed to change.
 swap_to() {
-  local target="$1" new_id log_output
-  # 2>&1 1>file swaps the streams: cdp-tab-swap.py's log lines (stderr) end
-  # up in $log_output via this command substitution, while its one line of
-  # real output - the new tab's id (stdout) - lands in the file instead.
-  log_output="$(python3 "$CDP_TAB_SWAP" --port "$CDP_PORT" --url "$target" \
-    ${CURRENT_TAB_ID:+--old-id "$CURRENT_TAB_ID"} --timeout "$SWAP_TIMEOUT" \
-    2>&1 1>/tmp/kiosk-cdp-new-id)"
-  [ -n "$log_output" ] && log "cdp-tab-swap: $log_output"
-  new_id="$(cat /tmp/kiosk-cdp-new-id 2>/dev/null)"
-  if [ -n "$new_id" ]; then
-    CURRENT_TAB_ID="$new_id"
+  local target="$1" log_output rc
+  log_output="$(python3 "$CDP_NAVIGATE" --port "$CDP_PORT" --tab-id "$CDP_TAB_ID" \
+    --url "$target" --timeout "$SWAP_TIMEOUT" 2>&1)"
+  rc=$?
+  [ -n "$log_output" ] && log "cdp-navigate: $log_output"
+  if [ "$rc" -eq 0 ]; then
     CURRENT_TARGET="$target"
-    log "swapped to $target (tab $new_id)"
+    log "navigated to $target"
   else
-    log "tab swap to $target failed, leaving current tab showing"
+    log "navigation to $target failed (rc=$rc), leaving current page showing"
   fi
 }
 
@@ -342,13 +353,13 @@ done
 FIRST_TARGET="$(decide_target)"
 log "initial target: $FIRST_TARGET"
 write_status "$FIRST_TARGET"
-CURRENT_TAB_ID="$(get_loading_tab_id)"
+CDP_TAB_ID="$(get_loading_tab_id)"
 swap_to "$FIRST_TARGET"
 
-# Watchdog: keep STATUS_FILE current, swap the on-screen tab when the
+# Watchdog: keep STATUS_FILE current, navigate the one tab in place when the
 # decided target actually changes, and restart Chromium from scratch if it
 # dies outright (crash recovery, not a target change - a dead Chromium
-# process takes every tab down with it, so this re-runs the same
+# process takes its tab down with it, so this re-runs the same
 # loading.html -> swap_to() sequence as a fresh boot).
 while true; do
   sleep "$CHECK_INTERVAL"
@@ -362,7 +373,7 @@ while true; do
     wait_for_loading_html_ready
     stop_boot_splash
     CURRENT_TARGET=""
-    CURRENT_TAB_ID="$(get_loading_tab_id)"
+    CDP_TAB_ID="$(get_loading_tab_id)"
     swap_to "$TARGET"
   elif [ "$TARGET" != "$CURRENT_TARGET" ]; then
     swap_to "$TARGET"

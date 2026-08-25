@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
-# Swaps kiosk-launch.sh's on-screen Chromium tab to a new URL as a real
-# top-level navigation - no iframe, so a target site's own X-Frame-Options
-# can't block it - without restarting the whole Chromium process (which is
-# what causes the multi-second black/white flash on this hardware). Opens
-# the new target as a background tab via Chromium's CDP HTTP endpoints,
-# waits for it to actually finish loading (only possible over a CDP
-# WebSocket - the HTTP endpoints can create/activate/close tabs but don't
-# report load state), then activates it and closes whatever tab was up
-# before. Hand-rolls the WebSocket client (stdlib only, no extra apt/pip
-# package) since this is the one place that needs anything beyond the
-# HTTP-only /json endpoints.
+# Navigates kiosk-launch.sh's one existing Chromium tab to a new URL in
+# place, as a real top-level navigation - no iframe, so a target site's own
+# X-Frame-Options can't block it.
 #
-# On a load timeout this reveals the new tab anyway rather than leaving the
-# old one showing forever - matching kiosk-launch.sh's own
-# wait_for_loading_html_ready() philosophy of "give up and reveal anyway"
-# rather than getting stuck.
+# This used to open the new target as a *second* tab (via Chromium's CDP
+# /json/new, then activate/close), so the process never had to fully
+# restart and there was no black/white relaunch flash. That broke on real
+# hardware: --kiosk mode's chrome-less, fullscreen styling only applies to
+# the one window Chromium creates at launch from the --kiosk command-line
+# flag - a tab or window spun up afterward via DevTools Protocol doesn't
+# inherit it, so it opened as an ordinary window with the OS's window
+# frame and Chromium's own tab strip/address bar visible, confirmed live
+# on the dev unit (2026-08-25). Navigating the one tab that was actually
+# launched with --kiosk in place can't hit that bug - no second
+# window/tab is ever created. Trade-off: switching targets shows a brief
+# loading moment again, but it's just a page navigation on an
+# already-warm renderer, nowhere near the multi-second cold-start flash a
+# full Chromium relaunch causes on this hardware.
+#
+# Chromium's HTTP-only /json endpoints can't drive Page.navigate or report
+# load state - only a real CDP WebSocket connection can - hence hand-rolling
+# a minimal client here (stdlib only, no extra apt/pip package).
 
 import argparse
 import base64
@@ -31,14 +37,17 @@ import urllib.request
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
-def http_put(url, timeout=5):
-    req = urllib.request.Request(url, method="PUT")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+def http_get_json(url, timeout=5):
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        return json.loads(r.read())
 
 
-def http_put_json(url, timeout=5):
-    return json.loads(http_put(url, timeout=timeout))
+def find_ws_url(port, tab_id, timeout):
+    targets = http_get_json(f"http://127.0.0.1:{port}/json", timeout=timeout)
+    for t in targets:
+        if t.get("id") == tab_id:
+            return t.get("webSocketDebuggerUrl")
+    return None
 
 
 def ws_connect(ws_url, timeout):
@@ -126,24 +135,21 @@ def ws_read_frame(sock, buf):
     return opcode, payload, rest
 
 
-def wait_for_load(ws_url, timeout):
+def navigate_and_wait(ws_url, target_url, timeout):
     sock, buf = ws_connect(ws_url, timeout)
     try:
+        # Sent back-to-back on the same connection, not awaited individually -
+        # Chromium processes CDP commands on a connection in the order
+        # received, so Page.enable is guaranteed to take effect before
+        # Page.navigate runs, which means the load it triggers is guaranteed
+        # to be observable to us. No enable-vs-navigate race to cover here,
+        # unlike the old open-a-new-tab approach where the tab could start
+        # loading before we'd even connected.
         ws_send_text(sock, json.dumps({"id": 1, "method": "Page.enable"}))
-        # A brand-new tab starts navigating the instant /json/new creates it,
-        # before this script has even finished the WebSocket handshake - for
-        # a tiny local file:// page (the fallback/loading pages) that's often
-        # enough time for it to finish loading *before* Page.enable takes
-        # effect, so Page.loadEventFired never fires for us to see (CDP
-        # doesn't replay past events to a newly-enabled domain). Checking
-        # document.readyState directly closes that race: if the page already
-        # finished, this catches it instead of stalling out to the full
-        # timeout for no reason. Confirmed reproducible locally (~1 in 5
-        # swaps to a trivial local page) before this check was added.
         ws_send_text(sock, json.dumps({
             "id": 2,
-            "method": "Runtime.evaluate",
-            "params": {"expression": "document.readyState"},
+            "method": "Page.navigate",
+            "params": {"url": target_url},
         }))
         deadline = time.time() + timeout
         while True:
@@ -166,9 +172,9 @@ def wait_for_load(ws_url, timeout):
             if msg.get("method") == "Page.loadEventFired":
                 return True
             if msg.get("id") == 2:
-                value = msg.get("result", {}).get("result", {}).get("value")
-                if value == "complete":
-                    return True
+                error = msg.get("result", {}).get("errorText")
+                if error:
+                    raise RuntimeError(f"Page.navigate failed: {error}")
     finally:
         try:
             sock.close()
@@ -179,45 +185,31 @@ def wait_for_load(ws_url, timeout):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--port", type=int, default=9222)
+    p.add_argument("--tab-id", required=True)
     p.add_argument("--url", required=True)
-    p.add_argument("--old-id", default="")
     p.add_argument("--timeout", type=float, default=15)
     args = p.parse_args()
 
-    base = f"http://127.0.0.1:{args.port}"
-
     try:
-        target = http_put_json(f"{base}/json/new?{urllib.parse.quote(args.url, safe='')}")
+        ws_url = find_ws_url(args.port, args.tab_id, args.timeout)
     except Exception as e:
-        print(f"cdp-tab-swap: failed to open new tab: {e}", file=sys.stderr)
+        print(f"cdp-navigate: failed to look up tab {args.tab_id}: {e}", file=sys.stderr)
         sys.exit(1)
 
-    new_id = target.get("id")
-    ws_url = target.get("webSocketDebuggerUrl")
-    if not new_id or not ws_url:
-        print("cdp-tab-swap: /json/new response missing id/webSocketDebuggerUrl", file=sys.stderr)
+    if not ws_url:
+        print(f"cdp-navigate: tab {args.tab_id} not found", file=sys.stderr)
         sys.exit(1)
 
     try:
-        loaded = wait_for_load(ws_url, args.timeout)
+        loaded = navigate_and_wait(ws_url, args.url, args.timeout)
     except Exception as e:
-        print(f"cdp-tab-swap: error waiting for load ({e}), revealing anyway", file=sys.stderr)
-        loaded = False
+        print(f"cdp-navigate: {e}", file=sys.stderr)
+        sys.exit(1)
+
     if not loaded:
-        print("cdp-tab-swap: timed out waiting for load, revealing anyway", file=sys.stderr)
+        print("cdp-navigate: timed out waiting for load, leaving it showing anyway", file=sys.stderr)
 
-    try:
-        http_put(f"{base}/json/activate/{new_id}")
-    except Exception as e:
-        print(f"cdp-tab-swap: failed to activate new tab: {e}", file=sys.stderr)
-
-    if args.old_id:
-        try:
-            http_put(f"{base}/json/close/{args.old_id}")
-        except Exception as e:
-            print(f"cdp-tab-swap: failed to close old tab {args.old_id}: {e}", file=sys.stderr)
-
-    print(new_id)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

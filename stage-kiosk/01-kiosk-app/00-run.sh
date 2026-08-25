@@ -9,7 +9,7 @@ install -v -m 644 -o root -g root files/dashboard-down.html "${ROOTFS_DIR}/etc/k
 install -v -m 644 -o root -g root files/loading.html "${ROOTFS_DIR}/etc/kiosk/loading.html"
 install -v -m 644 -o root -g root files/kiosk-boot-splash.png "${ROOTFS_DIR}/etc/kiosk/kiosk-boot-splash.png"
 install -v -m 755 -o root -g root files/kiosk-status-server.py "${ROOTFS_DIR}/etc/kiosk/kiosk-status-server.py"
-install -v -m 755 -o root -g root files/cdp-tab-swap.py "${ROOTFS_DIR}/etc/kiosk/cdp-tab-swap.py"
+install -v -m 755 -o root -g root files/cdp-navigate.py "${ROOTFS_DIR}/etc/kiosk/cdp-navigate.py"
 
 sed "s/KIOSK_USER_PLACEHOLDER/${FIRST_USER_NAME}/g" files/kiosk-status-server.service \
 	> "${ROOTFS_DIR}/etc/systemd/system/kiosk-status-server.service"

@@ -62,7 +62,7 @@ install -v -m 644 -o root -g root "$SRC/dashboard-down.html" /etc/kiosk/dashboar
 install -v -m 644 -o root -g root "$SRC/loading.html" /etc/kiosk/loading.html
 install -v -m 644 -o root -g root "$SRC/kiosk-boot-splash.png" /etc/kiosk/kiosk-boot-splash.png
 install -v -m 755 -o root -g root "$SRC/kiosk-status-server.py" /etc/kiosk/kiosk-status-server.py
-install -v -m 755 -o root -g root "$SRC/cdp-tab-swap.py" /etc/kiosk/cdp-tab-swap.py
+install -v -m 755 -o root -g root "$SRC/cdp-navigate.py" /etc/kiosk/cdp-navigate.py
 
 echo "$NEW_SHA" > "$APP_VERSION_FILE"
 
