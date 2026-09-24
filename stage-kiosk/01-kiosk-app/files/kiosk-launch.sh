@@ -168,21 +168,39 @@ CHECKIN_OK=0
 CHECKIN_SITE_CODE=""
 CHECKIN_DISPLAY_URL=""
 CHECKIN_CHANNEL="prod"
+# How many check-ins in a row have failed. A single dropped/slow request is
+# normal on WiFi and shouldn't blank a working display - decide_target() only
+# switches to an error page once this reaches CHECKIN_FAILS_BEFORE_ERROR
+# (3 x 15s = ~45s of real, sustained trouble). Updated in checkin(), which
+# always runs in the parent shell, so decide_target()'s subshell can read it.
+CHECKIN_FAIL_STREAK=0
+CHECKIN_FAILS_BEFORE_ERROR=3
 checkin() {
-  local payload response
+  local payload response attempt ok=0
   payload="$(jq -n \
     --arg mac "$(get_mac)" \
     --arg hostname "$(hostname)" \
     --arg rustdesk_id "$(read_trimmed "$RUSTDESK_ID_FILE")" \
     --arg image_build "$(read_trimmed "$IMAGE_BUILD_FILE")" \
     '{mac: $mac, hostname: $hostname, rustdesk_id: $rustdesk_id, image_build: $image_build}')"
-  if response="$(curl -fsS --max-time 5 -H 'Content-Type: application/json' \
-    -d "$payload" "$CHECKIN_ENDPOINT")"; then
+  # Two quick attempts before counting a failure: a connection reset or one
+  # stalled request often works on an immediate retry.
+  for attempt in 1 2; do
+    if response="$(curl -fsS --max-time 5 -H 'Content-Type: application/json' \
+      -d "$payload" "$CHECKIN_ENDPOINT")"; then
+      ok=1
+      break
+    fi
+    [ "$attempt" = "1" ] && sleep 1
+  done
+  if [ "$ok" = "1" ]; then
+    CHECKIN_FAIL_STREAK=0
     CHECKIN_OK=1
     CHECKIN_SITE_CODE="$(jq -r '.site_code // empty' <<< "$response")"
     CHECKIN_DISPLAY_URL="$(jq -r '.url // empty' <<< "$response")"
     CHECKIN_CHANNEL="$(jq -r '.channel // "prod"' <<< "$response")"
   else
+    CHECKIN_FAIL_STREAK=$((CHECKIN_FAIL_STREAK + 1))
     CHECKIN_OK=0
     CHECKIN_SITE_CODE=""
     CHECKIN_DISPLAY_URL=""
@@ -207,6 +225,13 @@ checkin() {
 # where it would otherwise stay frozen at whatever it was at boot forever.
 decide_target() {
   if [ "$CHECKIN_OK" != "1" ]; then
+    # Brief hiccup: keep whatever's already on screen instead of flashing an
+    # error page. Only applies once something real is showing (CURRENT_TARGET
+    # is empty during boot, so the first check-in still falls through).
+    if [ -n "$CURRENT_TARGET" ] && [ "$CHECKIN_FAIL_STREAK" -lt "$CHECKIN_FAILS_BEFORE_ERROR" ]; then
+      echo "$CURRENT_TARGET"
+      return
+    fi
     if internet_reachable; then
       render_page "$DASHBOARD_DOWN_TEMPLATE" "$DASHBOARD_DOWN_RENDERED"
       echo "file://${DASHBOARD_DOWN_RENDERED}"
