@@ -63,6 +63,9 @@ CHECKIN_ENDPOINT="https://utsopsdashboard.com/v1/kiosk-checkin"
 SITE_CODE_FILE="/boot/firmware/site-code.txt"
 RUSTDESK_ID_FILE="/boot/firmware/rustdesk-id.txt"
 IMAGE_BUILD_FILE="/etc/kiosk/image-build.txt"
+# Written by kiosk-self-update.sh after each successful update: the git commit of the
+# app files now installed. Absent until the first self-update, so it reads as blank.
+APP_VERSION_FILE="/etc/kiosk/app-version.txt"
 FALLBACK_TEMPLATE="/etc/kiosk/mac-fallback.html"
 FALLBACK_RENDERED="/tmp/kiosk-mac-fallback.html"
 NOT_REGISTERED_TEMPLATE="/etc/kiosk/not-registered.html"
@@ -182,7 +185,8 @@ checkin() {
     --arg hostname "$(hostname)" \
     --arg rustdesk_id "$(read_trimmed "$RUSTDESK_ID_FILE")" \
     --arg image_build "$(read_trimmed "$IMAGE_BUILD_FILE")" \
-    '{mac: $mac, hostname: $hostname, rustdesk_id: $rustdesk_id, image_build: $image_build}')"
+    --arg app_version "$(read_trimmed "$APP_VERSION_FILE")" \
+    '{mac: $mac, hostname: $hostname, rustdesk_id: $rustdesk_id, image_build: $image_build, app_version: $app_version}')"
   # Two quick attempts before counting a failure: a connection reset or one
   # stalled request often works on an immediate retry.
   for attempt in 1 2; do
